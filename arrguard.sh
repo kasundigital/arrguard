@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 CONFIG_FILE="${ARRGUARD_CONFIG:-/etc/arrguard.conf}"
 
 APP="auto"
@@ -19,6 +19,9 @@ BLOCKLIST="true"
 SEARCH_AGAIN="true"
 REJECT_NO_VIDEO="true"
 REJECT_MISSING_PATH="false"
+# Optional Docker/container-to-host path mappings, separated by semicolons.
+# Example: /downloads=/mnt/downloads;/media=/mnt/media
+PATH_MAPPINGS=""
 LOG_FILE="/var/log/arrguard.log"
 LOCK_FILE="/run/lock/arrguard.lock"
 
@@ -184,6 +187,40 @@ video_readable() {
     "$file" 2>/dev/null | grep -q '^video$'
 }
 
+map_output_path() {
+  local path="$1"
+  local mapping from to suffix
+  local -a mappings
+
+  if [[ -z "$PATH_MAPPINGS" ]]; then
+    printf '%s' "$path"
+    return
+  fi
+
+  IFS=';' read -r -a mappings <<<"$PATH_MAPPINGS"
+
+  for mapping in "${mappings[@]}"; do
+    [[ "$mapping" == *=* ]] || continue
+    from="${mapping%%=*}"
+    to="${mapping#*=}"
+
+    [[ -n "$from" && -n "$to" ]] || continue
+
+    if [[ "$path" == "$from" ]]; then
+      printf '%s' "$to"
+      return
+    fi
+
+    if [[ "$path" == "$from/"* ]]; then
+      suffix="${path#"$from"}"
+      printf '%s%s' "$to" "$suffix"
+      return
+    fi
+  done
+
+  printf '%s' "$path"
+}
+
 queue_endpoint() {
   if [[ "$app_name" == "sonarr" ]]; then
     printf '%s' "queue?page=1&pageSize=200&includeUnknownSeriesItems=true"
@@ -283,6 +320,7 @@ inspect_item() {
   status="$(jq -r '.status // ""' <<<"$item")"
   state="$(jq -r '.trackedDownloadState // ""' <<<"$item")"
   output_path="$(jq -r '.outputPath // ""' <<<"$item")"
+  output_path="$(map_output_path "$output_path")"
 
   case "$state" in
     importPending|importBlocked|importFailed) ;;
