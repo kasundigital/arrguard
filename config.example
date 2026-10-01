@@ -1,0 +1,37 @@
+# ArrGuard configuration
+# Copy to /etc/arrguard.conf and edit the values you need.
+
+# auto | sonarr | radarr
+APP="auto"
+
+SONARR_URL="http://127.0.0.1:8989"
+SONARR_API_KEY=""
+
+RADARR_URL="http://127.0.0.1:7878"
+RADARR_API_KEY=""
+
+# Reject media smaller than this value.
+MIN_VIDEO_SIZE_MIB="100"
+
+# Safety first: keep true until you verify logs.
+DRY_RUN="true"
+
+# Checks
+CHECK_SAMPLE="true"
+CHECK_VIDEO_STREAM="true"
+CHECK_ARCHIVES="true"
+
+# Actions taken for a rejected queue item.
+REMOVE_FROM_CLIENT="true"
+BLOCKLIST="true"
+SEARCH_AGAIN="true"
+
+# If true, a completed/problematic queue item with no video is rejected.
+REJECT_NO_VIDEO="true"
+
+# Missing paths can indicate a path-mapping problem, so this is off by default.
+REJECT_MISSING_PATH="false"
+
+# Logging
+LOG_FILE="/var/log/arrguard.log"
+LOCK_FILE="/run/lock/arrguard.lock"
