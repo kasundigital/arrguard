@@ -2,6 +2,14 @@
 
 All notable changes to ArrGuard will be documented here.
 
+## [0.1.1] - 2026-10-01
+
+### Added
+
+- Docker/container path translation with `PATH_MAPPINGS`
+- Docker path-mapping and networking documentation
+- Safe guidance for host-vs-container download paths
+
 ## [0.1.0] - 2026-10-01
 
 ### Added
