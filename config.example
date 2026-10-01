@@ -32,6 +32,13 @@ REJECT_NO_VIDEO="true"
 # Missing paths can indicate a path-mapping problem, so this is off by default.
 REJECT_MISSING_PATH="false"
 
+# Docker/container path mapping
+# If Sonarr/Radarr reports a container path that differs from the host path,
+# map it here. Separate multiple mappings with semicolons.
+# Example:
+# PATH_MAPPINGS="/downloads=/mnt/downloads;/media=/mnt/media"
+PATH_MAPPINGS=""
+
 # Logging
 LOG_FILE="/var/log/arrguard.log"
 LOCK_FILE="/run/lock/arrguard.lock"
