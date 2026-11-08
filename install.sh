@@ -18,6 +18,13 @@ echo "Installing ArrGuard ($ARRGUARD_REF)..."
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y curl jq ffmpeg findutils util-linux coreutils
+  # Optional: archive test/extract (ARCHIVE_ACTION="extract"). unrar is in
+  # Ubuntu "multiverse" / Debian "non-free"; 7zip package name varies by release.
+  DEBIAN_FRONTEND=noninteractive apt-get install -y unrar >/dev/null 2>&1 \
+    || echo "Note: 'unrar' not installed (enable multiverse/non-free for RAR extraction)."
+  DEBIAN_FRONTEND=noninteractive apt-get install -y 7zip >/dev/null 2>&1 \
+    || DEBIAN_FRONTEND=noninteractive apt-get install -y p7zip-full >/dev/null 2>&1 \
+    || echo "Note: 7-Zip not installed (needed for .7z/.zip extraction)."
 else
   echo "Automatic dependency installation currently supports apt-based systems."
   echo "Install curl, jq, ffmpeg, findutils, util-linux and coreutils, then run this installer again."

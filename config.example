@@ -26,11 +26,16 @@ CHECK_VIDEO_STREAM="true"
 CHECK_ARCHIVES="true"
 FFPROBE_TIMEOUT="60"
 
-# Archives next to a missing/small video usually mean extraction (Unpackerr,
-# client post-processing) is not finished.
-#   skip   = leave it alone (safe default)
-#   reject = treat as a bad release
+# Archives next to a missing/small video (e.g. an obfuscated RAR set the
+# download client did not unpack).
+#   skip    = leave it alone (use this if Unpackerr/the client still extracts)
+#   extract = look inside + test it: extract when intact and it contains video,
+#             reject when password-protected, corrupt, incomplete or no video
+#             inside (needs unrar and/or 7z)
+#   reject  = reject without testing (not recommended: good releases get removed)
 ARCHIVE_ACTION="skip"
+# Free space to keep on the download disk after extracting (MiB).
+EXTRACT_MIN_FREE_MIB="1024"
 
 # Skip downloads whose files changed within this many minutes (import,
 # extraction or move may still be running). 0 disables.

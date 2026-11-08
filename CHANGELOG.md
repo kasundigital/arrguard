@@ -2,6 +2,23 @@
 
 All notable changes to ArrGuard will be documented here.
 
+## [0.3.0] - 2026-11-08
+
+### Added
+
+- `ARCHIVE_ACTION="extract"`: tests archives in downloads with no usable video and
+  extracts intact ones (RAR via `unrar`, 7z/zip via `7z`). Password-protected, corrupt,
+  incomplete and no-video-inside archives are rejected. Extraction goes to a hidden
+  `.arrguard-extract` folder (ignored by Sonarr/Radarr) and is moved into place only
+  when complete; ownership is copied from the download folder.
+- `EXTRACT_MIN_FREE_MIB` free-space guard before extracting.
+- Installer installs `unrar` / `7zip` when available.
+
+### Fixed
+
+- A video was rejected as unreadable when `ffprobe` hit its timeout. Timeouts now
+  log a warning and keep the file. (Was pushed after v0.2.0 was merged.)
+
 ## [0.2.0] - 2026-11-08
 
 ### Fixed

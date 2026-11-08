@@ -18,7 +18,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       - name: Check shell scripts
-        run: shellcheck arrguard.sh install.sh uninstall.sh tests/run-tests.sh
+        run: shellcheck arrguard.sh install.sh uninstall.sh tests/run-tests.sh tests/run-archive-tests.sh
 
   tests:
     runs-on: ubuntu-latest
@@ -27,7 +27,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y jq curl util-linux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl util-linux
+          sudo apt-get install -y 7zip || sudo apt-get install -y p7zip-full
 
       - name: Run integration tests
         run: bash tests/run-tests.sh
+
+      - name: Run archive tests
+        run: bash tests/run-archive-tests.sh
