@@ -4,7 +4,7 @@ Automatic bad-download recovery for **Sonarr** and **Radarr**.
 
 ArrGuard checks completed/problematic downloads and can automatically reject unusable releases, remove them from the download client, blocklist the bad release, and trigger a replacement search.
 
-> **Status:** v0.2.0 — early public release. Start with `DRY_RUN=true`.
+> **Status:** v0.3.0 — early public release. Start with `DRY_RUN=true`.
 
 ## What it detects
 
@@ -12,7 +12,9 @@ ArrGuard checks completed/problematic downloads and can automatically reject unu
 - Sample-only releases
 - Completed downloads with no usable video
 - Unreadable/corrupt video streams using `ffprobe`
-- Archive-only downloads where no video was extracted
+- Archive-only downloads where no video was extracted — with `ARCHIVE_ACTION="extract"` they are
+  tested and **extracted automatically** when intact, and rejected when password-protected,
+  corrupt, missing volumes or containing no video (e.g. `.exe` bait)
 - Missing output paths (warning by default; optional reject)
 
 ArrGuard only looks at queue items in the `importPending` or `importBlocked` state. It never touches
@@ -70,6 +72,24 @@ DRY_RUN="false"
 
 Only an explicit `false` (or `0`/`no`) enables live mode. A typo keeps it in dry-run.
 
+## Archive extraction
+
+Obfuscated releases (random names like `foeJK9bQWk45srIBF.part1.rar`) sometimes reach Sonarr/Radarr
+still packed. With:
+
+```ini
+ARCHIVE_ACTION="extract"
+```
+
+ArrGuard lists the archive, tests it (`unrar t` / `7z t`, never prompting for a password), checks
+free space (`EXTRACT_MIN_FREE_MIB`), and extracts into a hidden `.arrguard-extract` folder that
+Sonarr/Radarr ignore. Only when extraction finished are the files moved into the download folder
+(with the folder's owner), so a half-written file is never imported. Sonarr/Radarr then import it
+on their next queue check. Multi-part sets (`.partN.rar`, `.7z.001`) and `.zip` are supported.
+
+Requires `unrar` (RAR) and/or `7z` (7z/zip; also reads RAR if `unrar` is missing). The installer
+tries to install both. Dry-run mode tests archives but does not extract.
+
 ## Running on a schedule (recommended)
 
 The installer adds a systemd timer that runs ArrGuard every 15 minutes on the host as root.
@@ -118,7 +138,7 @@ DRY_RUN="true"
 CHECK_SAMPLE="true"
 CHECK_VIDEO_STREAM="true"
 CHECK_ARCHIVES="true"
-ARCHIVE_ACTION="skip"             # skip | reject
+ARCHIVE_ACTION="skip"             # skip | extract | reject
 MIN_AGE_MINUTES="10"
 
 REMOVE_FROM_CLIENT="true"
@@ -215,6 +235,7 @@ A missing path can be caused by remote path mappings or mount problems rather th
 
 ```bash
 bash tests/run-tests.sh
+bash tests/run-archive-tests.sh   # needs 7z
 ```
 
 Runs ArrGuard against a mock Sonarr/Radarr API with fixture downloads and checks exactly which
@@ -229,6 +250,7 @@ queue items get removed. Needs `python3`, `jq`, `curl` and `flock`.
 - ffmpeg / ffprobe
 - findutils
 - util-linux (`flock`)
+- Optional: `unrar` and/or `7z` for `ARCHIVE_ACTION="extract"`
 - Sonarr or Radarr API access
 
 ## Uninstall
@@ -245,8 +267,6 @@ sudo PURGE_CONFIG=1 /opt/arrguard/uninstall.sh
 
 ## Roadmap
 
-- Better incomplete RAR/7z detection
-- Password-protected archive detection
 - Multiple Sonarr/Radarr instances per app
 - Configurable minimum sizes per app/profile
 - Notifications/webhooks

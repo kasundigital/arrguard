@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.2.0"
+VERSION="0.3.0"
 CONFIG_FILE="${ARRGUARD_CONFIG:-/etc/arrguard.conf}"
 
 APP="auto"
@@ -18,9 +18,14 @@ CHECK_SAMPLE="true"
 CHECK_VIDEO_STREAM="true"
 CHECK_ARCHIVES="true"
 # What to do when a download contains archives but no usable video:
-#   skip   = leave it alone (extraction by Unpackerr/client may still be pending)
-#   reject = treat it as a bad release
+#   skip    = leave it alone (extraction by Unpackerr/client may still be pending)
+#   extract = look inside + test the archive; extract it if it is intact and
+#             contains video, reject it if it is password-protected, corrupt,
+#             incomplete or has no video inside (needs unrar and/or 7z)
+#   reject  = treat it as a bad release without testing
 ARCHIVE_ACTION="skip"
+# Free space to keep on the download disk after extracting (MiB).
+EXTRACT_MIN_FREE_MIB="1024"
 # Skip downloads whose files changed within this many minutes
 # (import, extraction or move may still be in progress). 0 disables.
 MIN_AGE_MINUTES="10"
@@ -94,7 +99,7 @@ for cmd in curl jq find stat sort head grep awk flock; do
   fi
 done
 
-for var in MIN_VIDEO_SIZE_MIB MIN_AGE_MINUTES FFPROBE_TIMEOUT; do
+for var in MIN_VIDEO_SIZE_MIB MIN_AGE_MINUTES FFPROBE_TIMEOUT EXTRACT_MIN_FREE_MIB; do
   if [[ ! "${!var}" =~ ^[0-9]+$ ]]; then
     log "ERROR | $var must be a whole number (got '${!var}')."
     exit 1
@@ -225,18 +230,187 @@ find_largest_video() {
       size="$(stat -c '%s' "$file" 2>/dev/null || echo 0)"
       printf '%s|%s\n' "$size" "$file"
     fi
-  done < <(find "$root" -type f -print0 2>/dev/null) |
+  done < <(find "$root" -name "$EXTRACT_TMP_NAME" -prune -o -type f -print0 2>/dev/null) |
     sort -t'|' -k1,1nr |
     head -n1
 }
 
 has_archive_files() {
   local root="$1"
-  find "$root" -type f \( \
+  find "$root" -name "$EXTRACT_TMP_NAME" -prune -o -type f \( \
     -iname "*.rar" -o -iname "*.r[0-9][0-9]" -o -iname "*.[0-9][0-9][0-9]" -o \
     -iname "*.7z" -o -iname "*.zip" -o \
     -iname "*.tar" -o -iname "*.gz" -o -iname "*.bz2" -o -iname "*.xz" \
   \) -print -quit 2>/dev/null | grep -q .
+}
+
+# ---- archive test + extract ------------------------------------------------
+
+EXTRACT_TMP_NAME=".arrguard-extract"
+
+# First volume of every archive set in the download (one per set).
+archive_candidates() {
+  local root="$1"
+  find "$root" -name "$EXTRACT_TMP_NAME" -prune -o -type f \( \
+    -iname "*.rar" -o -iname "*.7z" -o -iname "*.7z.001" -o -iname "*.zip" \
+  \) -print 2>/dev/null | while IFS= read -r f; do
+    local lower="${f,,}"
+    # multi-part RAR: keep only part1/part01/part001
+    if [[ "$lower" =~ \.part([0-9]+)\.rar$ ]]; then
+      (( 10#${BASH_REMATCH[1]} == 1 )) || continue
+    fi
+    printf '%s\n' "$f"
+  done | sort
+}
+
+archive_tool() {
+  local lower="${1,,}"
+  if [[ "$lower" == *.rar ]]; then
+    command_exists unrar && { printf 'unrar'; return 0; }
+    command_exists 7z && { printf '7z'; return 0; }
+  else
+    command_exists 7z && { printf '7z'; return 0; }
+  fi
+  return 1
+}
+
+# Prints the file names inside the archive. -p- / -p- : never prompt for a password.
+archive_list() {
+  local tool="$1" file="$2"
+  if [[ "$tool" == "unrar" ]]; then
+    unrar lb -p- "$file" </dev/null 2>/dev/null
+  else
+    7z l -slt -p- "$file" </dev/null 2>/dev/null |
+      awk '/^----------/{f=1;next} f && /^Path = /{sub(/^Path = /,""); print}'
+  fi
+}
+
+# Total unpacked size in bytes.
+archive_size() {
+  local tool="$1" file="$2"
+  if [[ "$tool" == "unrar" ]]; then
+    unrar l -v -p- "$file" </dev/null 2>/dev/null |
+      awk 'NF{last=$1} END{if (last ~ /^[0-9]+$/) print last; else print 0}'
+  else
+    7z l -slt -p- "$file" </dev/null 2>/dev/null |
+      awk '/^----------/{f=1} f && /^Size = /{s+=$3} END{print s+0}'
+  fi
+}
+
+# Returns the tool's exit code: 0 = intact.
+archive_test() {
+  local tool="$1" file="$2"
+  if [[ "$tool" == "unrar" ]]; then
+    unrar t -p- -idq "$file" </dev/null >/dev/null 2>&1
+  else
+    7z t -p- -bso0 -bsp0 -bse0 "$file" </dev/null >/dev/null 2>&1
+  fi
+}
+
+archive_extract() {
+  local tool="$1" file="$2" dest="$3"
+  if [[ "$tool" == "unrar" ]]; then
+    unrar x -o+ -p- -idq -y "$file" "$dest/" </dev/null >/dev/null 2>&1
+  else
+    7z x -p- -aoa -bso0 -bsp0 -bse0 -o"$dest" "$file" </dev/null >/dev/null 2>&1
+  fi
+}
+
+archive_fail_reason() {
+  local tool="$1" rc="$2"
+  if [[ "$tool" == "unrar" && "$rc" == "11" ]]; then
+    printf 'ARCHIVE_PASSWORD'
+  elif [[ "$tool" == "unrar" ]]; then
+    printf 'ARCHIVE_CORRUPT'
+  else
+    printf 'ARCHIVE_PASSWORD_OR_CORRUPT'
+  fi
+}
+
+# Handles a download whose usable video is missing/small but has archives.
+# Either rejects it, extracts it (next run sees the video), or waits.
+handle_archives() {
+  local item="$1" root="$2" title="$3"
+  local -a candidates=() video_archives=() video_tools=()
+  local c i tool names rc fail_reason="" total=0 size avail dir tmp
+
+  mapfile -t candidates < <(archive_candidates "$root")
+  if (( ${#candidates[@]} == 0 )); then
+    log "WAIT | Archive type not supported for extraction | $title"
+    return 0
+  fi
+
+  for c in "${candidates[@]}"; do
+    if ! tool="$(archive_tool "$c")"; then
+      log "WARNING | unrar/7z not installed; cannot inspect archive | $title"
+      return 0
+    fi
+    rc=0
+    names="$(archive_list "$tool" "$c")" || rc=$?
+    if grep -qiE '\.(mkv|mk3d|mp4|m4v|mov|avi|wmv|webm|ts|m2ts|mts|mpg|mpeg|vob|ogv|3gp|rmvb|mxf)$' <<<"$names"; then
+      video_archives+=("$c")
+      video_tools+=("$tool")
+    elif [[ -z "$names" ]]; then
+      # Nothing listed: encrypted headers or a broken first volume.
+      rc=0
+      archive_test "$tool" "$c" || rc=$?
+      if (( rc != 0 )); then
+        fail_reason="$(archive_fail_reason "$tool" "$rc")"
+      fi
+    fi
+  done
+
+  if (( ${#video_archives[@]} == 0 )); then
+    reject_queue_item "$item" "${fail_reason:-ARCHIVE_NO_VIDEO_INSIDE}"
+    return 0
+  fi
+
+  for i in "${!video_archives[@]}"; do
+    size="$(archive_size "${video_tools[$i]}" "${video_archives[$i]}")"
+    total=$((total + size))
+  done
+
+  avail="$(df -P -B1 "$root" 2>/dev/null | awk 'NR==2{print $4}')"
+  if [[ "$avail" =~ ^[0-9]+$ ]] && (( avail < total + EXTRACT_MIN_FREE_MIB * 1024 * 1024 )); then
+    log "WAIT | Not enough free space to extract ($((total / 1024 / 1024)) MiB needed, $((avail / 1024 / 1024)) MiB free) | $title"
+    return 0
+  fi
+
+  for i in "${!video_archives[@]}"; do
+    rc=0
+    archive_test "${video_tools[$i]}" "${video_archives[$i]}" || rc=$?
+    if (( rc != 0 )); then
+      log "BAD | Archive test failed (rc=$rc) | ${video_archives[$i]##*/}"
+      reject_queue_item "$item" "$(archive_fail_reason "${video_tools[$i]}" "$rc")"
+      return 0
+    fi
+  done
+
+  if is_dry_run; then
+    log "DRYRUN | Archive OK; would extract $((total / 1024 / 1024)) MiB | $title"
+    return 0
+  fi
+
+  for i in "${!video_archives[@]}"; do
+    c="${video_archives[$i]}"
+    dir="$(dirname "$c")"
+    tmp="$dir/$EXTRACT_TMP_NAME"
+    # Extract into a hidden folder (ignored by Sonarr/Radarr) so a
+    # half-written file is never imported, then move into place.
+    [[ -n "$dir" && -d "$dir" ]] || continue
+    rm -rf -- "$tmp"
+    mkdir -p -- "$tmp"
+    if ! archive_extract "${video_tools[$i]}" "$c" "$tmp"; then
+      rm -rf -- "$tmp"
+      log "ERROR | Extraction failed | ${c##*/} | $title"
+      return 0
+    fi
+    chown -R --reference="$dir" -- "$tmp" 2>/dev/null || true
+    find "$tmp" -mindepth 1 -maxdepth 1 -exec mv -f -t "$dir" -- {} +
+    rmdir -- "$tmp" 2>/dev/null || rm -rf -- "$tmp"
+  done
+
+  log "EXTRACTED | $((total / 1024 / 1024)) MiB | $title"
 }
 
 recently_modified() {
@@ -451,6 +625,12 @@ inspect_item() {
     elif ! video_readable "$video_path"; then
       reason="UNREADABLE_VIDEO"
     fi
+  fi
+
+  # Archives next to a missing/small video: test + extract, or wait.
+  if [[ "$archives" == "true" && ( "$reason" == "ARCHIVE_NO_VIDEO" || "$reason" == "SMALL_VIDEO" ) && "${ARCHIVE_ACTION,,}" == "extract" ]]; then
+    handle_archives "$item" "$output_path" "$title"
+    return 0
   fi
 
   # Archives next to a missing/small video usually mean extraction is not
