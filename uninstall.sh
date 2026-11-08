@@ -6,6 +6,12 @@ if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
   exit 1
 fi
 
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl disable --now arrguard.timer >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/arrguard.timer /etc/systemd/system/arrguard.service
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
 rm -rf /opt/arrguard
 rm -f /run/lock/arrguard.lock
 
