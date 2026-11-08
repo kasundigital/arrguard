@@ -4,7 +4,7 @@ Automatic bad-download recovery for **Sonarr** and **Radarr**.
 
 ArrGuard checks completed/problematic downloads and can automatically reject unusable releases, remove them from the download client, blocklist the bad release, and trigger a replacement search.
 
-> **Status:** v0.1.1 — early public release. Start with `DRY_RUN=true`.
+> **Status:** v0.2.0 — early public release. Start with `DRY_RUN=true`.
 
 ## What it detects
 
@@ -14,13 +14,21 @@ ArrGuard checks completed/problematic downloads and can automatically reject unu
 - Unreadable/corrupt video streams using `ffprobe`
 - Archive-only downloads where no video was extracted
 - Missing output paths (warning by default; optional reject)
+
+ArrGuard only looks at queue items in the `importPending` or `importBlocked` state. It never touches
+items that are downloading, importing, imported or failed, and by default it skips:
+
+- downloads whose files changed in the last `MIN_AGE_MINUTES` (import/extraction still running)
+- archives next to a missing or small video (Unpackerr or the client may still be extracting)
+- items Sonarr/Radarr do not recognise (`INCLUDE_UNKNOWN_ITEMS="false"`)
+- each season pack is inspected once, not once per episode
 - Common TV/movie video formats including MKV, MP4, M4V, MOV, AVI, WMV, WebM, TS/M2TS, MPG/MPEG, VOB, OGV/OGM, 3GP, RM/RMVB, MXF, DV and others
 
 When a release is rejected, ArrGuard can:
 
-1. Remove it from the download client
+1. Remove it from the download client (**this deletes the downloaded files**)
 2. Blocklist the release in Sonarr/Radarr
-3. Trigger a new episode/movie search
+3. Let Sonarr/Radarr search for a replacement (`SEARCH_AGAIN`, needs `BLOCKLIST=true`)
 
 ## Install
 
@@ -54,46 +62,44 @@ Watch the log:
 sudo tail -f /var/log/arrguard.log
 ```
 
-When the log looks correct, set:
+When every `REJECT` line in the log is a release you really want gone, set:
 
 ```ini
 DRY_RUN="false"
 ```
 
-## Sonarr Connect setup
+Only an explicit `false` (or `0`/`no`) enables live mode. A typo keeps it in dry-run.
 
-Go to:
+## Running on a schedule (recommended)
 
-**Settings → Connect → + → Custom Script**
+The installer adds a systemd timer that runs ArrGuard every 15 minutes on the host as root.
+The config (which holds your API keys) stays root-only, and download paths are host paths, so this
+works whether Sonarr/Radarr run natively or in Docker (use `PATH_MAPPINGS` for Docker).
 
-Use:
-
-```text
-Name: ArrGuard
-Path: /opt/arrguard/arrguard.sh
+```bash
+sudo systemctl enable --now arrguard.timer
+systemctl list-timers arrguard.timer
 ```
 
-Recommended trigger:
+## Sonarr/Radarr Connect (optional)
 
-- ✅ On Manual Interaction Required
+You can also run ArrGuard as a **Custom Script** (Settings → Connect → + → Custom Script) with the
+trigger **On Manual Interaction Required**. Keep in mind:
 
-You can also run ArrGuard manually at any time; each run scans the current queue.
+- The script runs **as the Sonarr/Radarr user and inside its environment**. If Sonarr/Radarr run in
+  Docker, the script, `/etc/arrguard.conf` and `curl`, `jq`, `flock` and `ffprobe` must exist
+  *inside the container*, and `/opt/arrguard/arrguard.sh` on the host is not visible there.
+- The config must be readable by that user (for example `chown root:sonarr /etc/arrguard.conf`
+  and `chmod 640`), or ArrGuard exits with an error.
+- The **Test** button is handled: ArrGuard exits successfully without scanning anything.
+- When called from Connect, ArrGuard uses the calling app automatically, so one config with both
+  API keys works for Sonarr and Radarr.
 
-## Radarr Connect setup
-
-Use the same script:
-
-```text
-/opt/arrguard/arrguard.sh
-```
-
-Set `APP="radarr"` in `/etc/arrguard.conf` if the machine only runs Radarr.
-
-For hosts with both apps, use separate config files and wrappers (multi-instance support will be improved in a future release).
+For Docker setups the systemd timer is simpler.
 
 ## Configuration
 
-Example:
+See [`config.example`](config.example) for every option. The main ones:
 
 ```ini
 APP="auto"
@@ -104,12 +110,16 @@ SONARR_API_KEY=""
 RADARR_URL="http://127.0.0.1:7878"
 RADARR_API_KEY=""
 
-MIN_VIDEO_SIZE_MIB="100"
+MIN_VIDEO_SIZE_MIB="100"          # global fallback
+SONARR_MIN_VIDEO_SIZE_MIB="40"    # short episodes/anime are often < 100 MiB
+RADARR_MIN_VIDEO_SIZE_MIB="100"
 DRY_RUN="true"
 
 CHECK_SAMPLE="true"
 CHECK_VIDEO_STREAM="true"
 CHECK_ARCHIVES="true"
+ARCHIVE_ACTION="skip"             # skip | reject
+MIN_AGE_MINUTES="10"
 
 REMOVE_FROM_CLIENT="true"
 BLOCKLIST="true"
@@ -117,6 +127,7 @@ SEARCH_AGAIN="true"
 
 REJECT_NO_VIDEO="true"
 REJECT_MISSING_PATH="false"
+INCLUDE_UNKNOWN_ITEMS="false"
 
 # Optional Docker/container path translation:
 PATH_MAPPINGS=""
@@ -200,6 +211,15 @@ ArrGuard can remove downloads and blocklist releases. Test with `DRY_RUN=true` f
 
 A missing path can be caused by remote path mappings or mount problems rather than a bad release, so `REJECT_MISSING_PATH` is disabled by default.
 
+## Tests
+
+```bash
+bash tests/run-tests.sh
+```
+
+Runs ArrGuard against a mock Sonarr/Radarr API with fixture downloads and checks exactly which
+queue items get removed. Needs `python3`, `jq`, `curl` and `flock`.
+
 ## Requirements
 
 - Linux
@@ -227,11 +247,10 @@ sudo PURGE_CONFIG=1 /opt/arrguard/uninstall.sh
 
 - Better incomplete RAR/7z detection
 - Password-protected archive detection
-- Multiple Sonarr/Radarr instances
+- Multiple Sonarr/Radarr instances per app
 - Configurable minimum sizes per app/profile
 - Notifications/webhooks
-- Optional systemd timer mode
-- Automated integration tests
+- Per-file checks inside season packs
 
 ## License
 
