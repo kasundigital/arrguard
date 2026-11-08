@@ -265,7 +265,16 @@ video_readable() {
     cmd=(timeout "$FFPROBE_TIMEOUT" "${cmd[@]}")
   fi
 
-  "${cmd[@]}" </dev/null 2>/dev/null | grep -q '^video$'
+  local out rc=0
+  out="$("${cmd[@]}" </dev/null 2>/dev/null)" || rc=$?
+
+  # Timeout (124) or ffprobe killed: we could not decide, so never reject on it.
+  if (( rc == 124 || rc == 137 )); then
+    log "WARNING | ffprobe timed out after ${FFPROBE_TIMEOUT}s; not rejecting | $file"
+    return 0
+  fi
+
+  grep -q '^video$' <<<"$out"
 }
 
 map_output_path() {
